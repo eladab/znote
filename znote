@@ -1,0 +1,78 @@
+#!/bin/bash
+
+if [[ -z "$NOTES_DIR" ]]; then
+    echo "Error: NOTES_DIR environment variable is not set."
+    echo "Please add it to your environment, for example:"
+    echo "  export NOTES_DIR=\"$HOME/Documents/Notes\""
+    echo "Add this line to your ~/.bashrc, ~/.zshrc, or equivalent shell config file."
+    exit 1
+fi
+
+if [[ ! -d "$NOTES_DIR" ]]; then
+    echo "Error: Notes directory '$NOTES_DIR' does not exist."
+    echo "Please create the directory or update the NOTES_DIR environment variable."
+    exit 1
+fi
+
+pushd "$NOTES_DIR" 1>/dev/null 
+
+while true; do
+    fzf_output=$(ag .+ . | fzf -e \
+        --bind 'ctrl-d:execute(filename=$(echo {} | cut -d: -f1) && rm -i "$filename" && if [[ ! -f "$filename" ]]; then echo "Deleted: $filename"; else echo "Deletion cancelled"; fi && sleep 1)+reload(ag .+ .)' \
+        --color hl:red,hl+:bright-red,bg+:238 \
+        --height 80 \
+        --print-query \
+        --layout=reverse \
+        --preview 'cat $(echo -e {} | cut -d : -f 1)' \
+        --header 'Press Ctrl-D to delete, Ctrl-C to exit')
+    fzf_exit_code=$?
+    
+    if [[ $fzf_exit_code -eq 130 ]]; then
+        break
+    elif [[ $fzf_exit_code -eq 1 ]] && [[ -n "$fzf_output" ]]; then
+        :
+    elif [[ $fzf_exit_code -ne 0 ]]; then
+        break
+    fi
+   
+    processed_output=$(echo "$fzf_output" | \
+         gawk '{
+             if(NR==1) query=$0
+             if(NR==2) selection=$0
+         } 
+         END{
+             if(query == ""){
+                 print "QUIT"
+             } else if(selection == ""){
+                 # Only query, no selection (new file)
+                 filename = query
+                 if(filename !~ /\.md$/){
+                     filename = gensub(" ","_","g",filename) ".md"
+                 }
+                 print "1:" filename
+             } else {
+                 # Query + selection (existing file)
+                 split(selection,a,":")
+                 print a[2] ":" a[1]
+             }
+         }')
+ 
+    if [[ "$processed_output" == "QUIT" ]]; then
+        vim -c "q!"
+    else
+        line_num=$(echo "$processed_output" | cut -d':' -f1)
+        filename=$(echo "$processed_output" | cut -d':' -f2)
+        if [[ "$line_num" == "1" ]]; then
+            vim "$filename"
+        else
+            vim "+$line_num" "$filename"
+        fi
+    fi
+    vim_exit_code=$?
+    
+    if [[ $vim_exit_code -ne 0 ]]; then
+        break
+    fi
+done
+
+popd 1>/dev/null
